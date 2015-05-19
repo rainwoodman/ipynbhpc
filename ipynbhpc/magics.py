@@ -55,8 +55,8 @@ aprun -n %(jobsize)d python-mpi %(spinup)s %(payload)s %(pickle)s %(varsout)s
                 varsout.update(set([a.strip() for a in c[2].split(',') if len(a.strip())]))
         return size, varsin, varsout
         
-    @cell_magic('qsub')
-    def qsub(self, line, cell):
+    @cell_magic('mpi')
+    def mpi(self, line, cell):
         payload = 'tmpjob.py'
         picklefile = 'tmpjob.pickle'
         logfile = 'tmpjob.log'
