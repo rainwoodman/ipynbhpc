@@ -34,6 +34,7 @@ env = pickle.loads(varsin)
 
 env['__file__'] = os.path.abspath(script)
 env['__name__'] = "__main__"
+env['MPI'] = MPI
 
 exec(script, env)
 

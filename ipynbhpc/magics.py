@@ -8,12 +8,9 @@ import re
 import PBS
 
 class Result(object):
-
-    def __init__(self, content):
-        self.content = content
-
-    def __repr__(self):
-        return self.content
+    def __init__(self, stdout, stderr):
+        self.stdout = stdout
+        self.stderr = stderr
 
 @magics_class
 class HPCMagics(Magics):
@@ -21,18 +18,16 @@ class HPCMagics(Magics):
         super(HPCMagics, self).__init__(shell)
         self.spinup = os.path.join(os.path.dirname(__file__), 'spinup.py')
 
-        self.setup()
-    def setup(self):
         self.PBS_TEMPLATE="""
-#PBS -j eo
 #PBS -N ipynbhpcjob
-#PBS -e %(logfile)s
 #PBS -q debug
 #PBS -l mppwidth=%(jobsize)d
+#PBS -o %(stderr)s
+#PBS -e %(stdout)s
 
 cd $PBS_O_WORKDIR
 
-aprun -n %(jobsize)d python-mpi %(spinup)s %(payload)s %(pickle)s %(varsout)s
+aprun -n %(jobsize)d python-mpi %(cmdline)s
 
 """
         pass
@@ -55,11 +50,45 @@ aprun -n %(jobsize)d python-mpi %(spinup)s %(payload)s %(pickle)s %(varsout)s
                 varsout.update(set([a.strip() for a in c[2].split(',') if len(a.strip())]))
         return size, varsin, varsout
         
+    @cell_magic('mpisetup')
+    def mpisetup(self, line, cell):
+        """ Setup the mpi magic 
+            Useful substitutes are:
+            
+            %(jobsize)d : The number of ranks to use
+            %(stdout)s : A generated location for the job stdout file.
+            %(stderr)s : A generated location for the job stderr file.
+            %(cmdline)s : A generated string for the command line to python
+                          interpretor.
+
+            
+            Example
+            -------
+
+            >>> %%mpisetup
+            #PBS -j eo
+            #PBS -l mppwidth=%(jobsize)d
+            #PBS -e %(stderr)s
+            #PBS -o %(stdout)s
+
+            cd $PBS_O_WORKDIR
+
+            aprun -n %(jobsize)d python-mpi %(cmdline)s
+            
+        """
+        for keyword in ['%(jobsize)d', '%(stderr)s', 
+                    '%(stdout)s', '%(cmdline)s']:
+            if keyword not in cell:
+                raise ValueError('Keyword `%s` not in the job script stub'
+                    % keyword)
+        self.PBS_TEMPLATE = cell
+
     @cell_magic('mpi')
     def mpi(self, line, cell):
-        payload = 'tmpjob.py'
+        payload = 'tmpjob-payload.py'
         picklefile = 'tmpjob.pickle'
-        logfile = 'tmpjob.log'
+        stderrfile = 'tmpjob.err'
+        stdoutfile = 'tmpjob.out'
         size, varsin, varsout = self.parse(line)
 
         with file(payload, 'w') as ff:
@@ -72,19 +101,45 @@ aprun -n %(jobsize)d python-mpi %(spinup)s %(payload)s %(pickle)s %(varsout)s
         with file(picklefile, 'w') as ff:
             cloudpickle.dump(d, ff, pickle.HIGHEST_PROTOCOL)
 
+        cmdline = "%(spinup)s %(payload)s %(pickle)s %(varsout)s" % dict(
+                spinup=self.spinup,
+                payload=payload,
+                pickle=picklefile,
+                varsout=" ".join(varsout))
+
         script = self.PBS_TEMPLATE % dict(
-            logfile='tmpjob.log',
-            jobsize=size,
-            spinup=self.spinup,
-            payload=payload,
-            pickle=picklefile,
-            varsout=" ".join(varsout))
+            stderr=stderrfile,
+            stdout=stdoutfile,
+            jobsize=size, cmdline=cmdline
+            )
 
         job = PBS.submit(script)
-        PBS.wait(job)
+        try:
+            PBS.wait(job)
+        except KeyboardInterrupt:
+            PBS.delete(job)
+
+        PBS.wait(job) 
         with file(picklefile, 'r') as ff:
             varsout = pickle.load(ff)
         for var in varsout:
             self.shell.user_ns[var] = varsout[var] 
-        with file(logfile, 'r') as ff:
-            return Result(ff.read())
+        try:
+            stderr = file(stderrfile, 'r')
+            with stderr:
+                errstr = stderr.read()
+            self.shell.write_err(errstr)
+            os.unlink(stderrfile)
+        except IOError:
+            errstr = None
+        try:
+            stdout = file(stdoutfile, 'r')
+            with stdout:
+                outstr = stdout.read()
+            self.shell.write(outstr)
+            os.unlink(stdoutfile)
+        except IOError:
+            outstr = None
+        os.unlink(payload)
+        os.unlink(picklefile)
+        return Result(stderr=errstr, stdout=outstr)
