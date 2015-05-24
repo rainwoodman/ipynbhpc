@@ -6,6 +6,7 @@ import cloudpickle
 import os.path
 import re
 import PBS
+import sys
 
 class Result(object):
     def __init__(self, stdout, stderr):
@@ -34,19 +35,15 @@ aprun -n %(jobsize)d python-mpi %(cmdline)s
 
     def parse(self, line):
         clauses = re.findall('(\s*(size|in|out)\(([^)]*)\))', line)
-        varsin = None
-        varsout = None
+        varsin = set()
+        varsout = set()
         size = 1
         for c in clauses:
             if c[1].lower() == 'size':
                 size = int(c[2])
             elif c[1].lower() == 'in':
-                if varsin is None:
-                    varsin = set()
                 varsin.update(set([a.strip() for a in c[2].split(',') if len(a.strip())]))
             elif c[1].lower() == 'out':
-                if varsout is None:
-                    varsout = set()
                 varsout.update(set([a.strip() for a in c[2].split(',') if len(a.strip())]))
         return size, varsin, varsout
         
@@ -86,6 +83,7 @@ aprun -n %(jobsize)d python-mpi %(cmdline)s
     @cell_magic('mpi')
     def mpi(self, line, cell):
         payload = 'tmpjob-payload.py'
+        pathfile = 'tmpjob-path.pickle'
         picklefile = 'tmpjob.pickle'
         stderrfile = 'tmpjob.err'
         stdoutfile = 'tmpjob.out'
@@ -94,6 +92,17 @@ aprun -n %(jobsize)d python-mpi %(cmdline)s
         with file(payload, 'w') as ff:
             ff.write(cell)
 
+        # use the absolute paths in the payload
+        # path is stored in a different pickle
+        # because unpickling the 'in' variable may need the properly
+        # setup path
+
+        path = [os.path.abspath(os.getcwd())] + \
+                    [os.path.abspath(p) for p in sys.path]
+
+        with file(pathfile, 'w') as ff:
+            cloudpickle.dump(path, ff)
+            
         d = {}
         for var in varsin:
             d[var] = self.shell.user_ns[var]
@@ -101,7 +110,8 @@ aprun -n %(jobsize)d python-mpi %(cmdline)s
         with file(picklefile, 'w') as ff:
             cloudpickle.dump(d, ff, pickle.HIGHEST_PROTOCOL)
 
-        cmdline = "%(spinup)s %(payload)s %(pickle)s %(varsout)s" % dict(
+        cmdline = "%(spinup)s %(path)s %(payload)s %(pickle)s %(varsout)s" % dict(
+                path=pathfile,
                 spinup=self.spinup,
                 payload=payload,
                 pickle=picklefile,
