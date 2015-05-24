@@ -35,7 +35,19 @@ path = comm.bcast(path)
 script = comm.bcast(script)
 varsin = comm.bcast(varsin)
 
-sys.path = pickle.loads(path)
+path = pickle.loads(path)
+
+# prepend current dir
+# append the rest of the path
+# this is done to avoid overriding path overridings
+# of the python intepreter.
+#
+# for example, our python-mpi (bcast) on Edison would
+# prefer to use those packages locally replicated at /dev/shm
+# to avoid many file operations.  
+
+sys.path.insert(0, path[0])
+sys.path.extend(path[1:])
 
 env = pickle.loads(varsin)
 
